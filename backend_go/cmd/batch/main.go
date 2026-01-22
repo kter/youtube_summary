@@ -107,7 +107,7 @@ func generateSummary(ctx context.Context, transcript, title string) (*SummaryDat
 	prompt := fmt.Sprintf(`以下のYouTube動画の字幕テキストを元に、以下の2種類の要約をJSON形式で出力してください。
 
 1. short_summary: 400文字程度の簡潔な要約（動画を見るかどうか判断できる情報を含める）
-2. detail_summary: 4000文字程度の詳細な要約（動画の内容を詳細に解説し、視聴しなくても内容が分かるレベルにする。章立てや箇条書きを使って読みやすくすること）
+2. detail_summary: 4000文字程度の詳細な要約（動画の内容を詳細に解説し、視聴しなくても内容が分かるレベルにする。章立てや箇条書き（Markdown形式）を使って読みやすくすること）
 
 動画タイトル: %s
 

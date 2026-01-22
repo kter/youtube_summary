@@ -1,4 +1,6 @@
 import { X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 
 function SummaryModal({ summary, isOpen, onClose }) {
   if (!isOpen) return null;
@@ -43,8 +45,10 @@ function SummaryModal({ summary, isOpen, onClose }) {
           {/* Detailed Summary */}
           <div className="prose prose-invert max-w-none">
             <h3 className="text-lg font-semibold text-accent-300 mb-4">詳細要約</h3>
-            <div className="whitespace-pre-wrap text-slate-300 text-base leading-relaxed">
-              {summary.detailSummary || "詳細な要約は現在作成中です。"}
+            <div className="prose prose-invert prose-sm max-w-none text-slate-300">
+              <ReactMarkdown remarkPlugins={[remarkBreaks]}>
+                {summary.detailSummary || "詳細な要約は現在作成中です。"}
+              </ReactMarkdown>
             </div>
           </div>
         </div>
