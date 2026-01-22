@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnpm-debug.log*
+
+# Build outputs
+dist/
+.build/
+*.zip
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/.terraform.lock.hcl
+
+# Lambda layer
+backend/layer/python/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.tfvars
+!*.tfvars.example
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
