@@ -1,6 +1,6 @@
 .PHONY: init-dev init-prd plan-dev plan-prd apply-dev apply-prd destroy-dev destroy-prd \
 	build-layer build-frontend deploy-frontend-dev deploy-frontend-prd \
-	invoke-batch-dev invoke-batch-prd logs-batch-dev logs-batch-prd clean
+	invoke-batch-local clean
 
 # =============================================================================
 # Terraform Commands
@@ -72,26 +72,10 @@ deploy-frontend-prd: build-frontend
 # Lambda Commands
 # =============================================================================
 
-invoke-batch-dev:
-	$(eval FUNC_NAME := $(shell cd terraform && AWS_PROFILE=dev terraform workspace select dev > /dev/null && AWS_PROFILE=dev terraform output -raw batch_lambda_function_name))
-	aws lambda invoke --function-name $(FUNC_NAME) --profile dev /tmp/batch-response.json
-	cat /tmp/batch-response.json
 
-invoke-batch-prd:
-	$(eval FUNC_NAME := $(shell cd terraform && AWS_PROFILE=prd terraform workspace select prd > /dev/null && AWS_PROFILE=prd terraform output -raw batch_lambda_function_name))
-	aws lambda invoke --function-name $(FUNC_NAME) --profile prd /tmp/batch-response.json
-	cat /tmp/batch-response.json
 
 invoke-batch-local:
 	cd backend_go && AWS_PROFILE=dev LOCAL_RUN=true go run cmd/batch/main.go
-
-logs-batch-dev:
-	$(eval FUNC_NAME := $(shell cd terraform && AWS_PROFILE=dev terraform workspace select dev > /dev/null && AWS_PROFILE=dev terraform output -raw batch_lambda_function_name))
-	aws logs tail /aws/lambda/$(FUNC_NAME) --follow --profile dev
-
-logs-batch-prd:
-	$(eval FUNC_NAME := $(shell cd terraform && AWS_PROFILE=prd terraform workspace select prd > /dev/null && AWS_PROFILE=prd terraform output -raw batch_lambda_function_name))
-	aws logs tail /aws/lambda/$(FUNC_NAME) --follow --profile prd
 
 logs-api-dev:
 	$(eval FUNC_NAME := $(shell cd terraform && AWS_PROFILE=dev terraform workspace select dev > /dev/null && AWS_PROFILE=dev terraform output -raw api_lambda_function_name))
@@ -108,10 +92,7 @@ logs-api-prd:
 # Build Go binaries
 build-go:
 	mkdir -p .build
-	# Batch Lambda
-	cd backend_go && GOOS=linux GOARCH=amd64 go build -o bootstrap cmd/batch/main.go
-	cd backend_go && zip -j ../.build/batch_lambda.zip bootstrap
-	rm backend_go/bootstrap
+
 	# API Lambda
 	cd backend_go && GOOS=linux GOARCH=amd64 go build -o bootstrap cmd/api/main.go
 	cd backend_go && zip -j ../.build/api_lambda.zip bootstrap

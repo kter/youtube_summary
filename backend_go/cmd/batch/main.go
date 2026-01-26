@@ -178,8 +178,8 @@ func generateSummary(ctx context.Context, transcript, title string) (*SummaryDat
 	return &summaryData, nil
 }
 
-func isVideoProcessed(ctx context.Context, videoID string) bool {
-	// Note: The original GSI is videoId-index
+func getVideoItem(ctx context.Context, videoID string) (map[string]types.AttributeValue, error) {
+	// Query GSI to get Primary Key
 	input := &dynamodb.QueryInput{
 		TableName:              aws.String(tableName),
 		IndexName:              aws.String("videoId-index"),
@@ -188,28 +188,18 @@ func isVideoProcessed(ctx context.Context, videoID string) bool {
 			":vid": &types.AttributeValueMemberS{Value: videoID},
 		},
 		Limit: aws.Int32(1),
-		// Project specific fields to check if detailed summary exists
-		// Note: We need to update this to fetch attributes if we want to check detailSummary presence
-		// But "KEYS_ONLY" index might not return non-key attributes unless fetched from base table.
-		// However, query on GSI with KEYS_ONLY only returns keys.
-		// If we want to check detailSummary, we might need to Fetch from base table afterwards,
-		// OR just assume if it's in the index, it's processed.
-		// BUT we want to update old items.
-		// Strategy: Query index to get PK (hashtag, processedAt), then GetItem from base table.
 	}
 
 	resp, err := dynamoClient.Query(ctx, input)
 	if err != nil {
-		log.Printf("Error checking processed video %s: %v", videoID, err)
-		return false
-	}
-	
-	if len(resp.Items) == 0 {
-		return false
+		return nil, fmt.Errorf("failed to query index: %w", err)
 	}
 
-	// Found in index. Now check if it has detail_summary.
-	// Since GSI is KEYS_ONLY (likely), we need to GetItem from main table using the keys found in GSI.
+	if len(resp.Items) == 0 {
+		return nil, nil // Not found
+	}
+
+	// Found in index. Get full item from base table.
 	item := resp.Items[0]
 	hashtag := item["hashtag"].(*types.AttributeValueMemberS).Value
 	processedAt := item["processedAt"].(*types.AttributeValueMemberS).Value
@@ -220,32 +210,18 @@ func isVideoProcessed(ctx context.Context, videoID string) bool {
 			"hashtag":     &types.AttributeValueMemberS{Value: hashtag},
 			"processedAt": &types.AttributeValueMemberS{Value: processedAt},
 		},
-		ProjectionExpression: aws.String("detailSummary"),
 	}
-	
+
 	getResult, err := dynamoClient.GetItem(ctx, getItemInput)
 	if err != nil {
-		log.Printf("Error fetching item from base table for %s: %v", videoID, err)
-		// Assume processed to be safe? Or false to retry?
-		// Retrying is safer to get the detail.
-		return false
-	}
-	
-	if getResult.Item == nil {
-		// Weird, index exists but item gone? Treat as not processed.
-		return false
+		return nil, fmt.Errorf("failed to get item: %w", err)
 	}
 
-	if _, ok := getResult.Item["detailSummary"]; !ok {
-		log.Printf("Video %s exists but missing detailSummary. Reprocessing.", videoID)
-		return false
-	}
-
-	return true
+	return getResult.Item, nil
 }
 
-func saveSummary(ctx context.Context, channelID string, video VideoDetails, summary *SummaryData) error {
-	log.Printf("DEBUG: Saving summary for video %s to table %s", video.ID, tableName)
+func saveVideoData(ctx context.Context, channelID string, video VideoDetails, transcript string, summary *SummaryData) error {
+	log.Printf("DEBUG: Saving video data for %s to table %s", video.ID, tableName)
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Flatten thumbnails to a map if needed, or store as Map/JSON
@@ -256,17 +232,21 @@ func saveSummary(ctx context.Context, channelID string, video VideoDetails, summ
 	}
 
 	item := map[string]types.AttributeValue{
-		"hashtag":       &types.AttributeValueMemberS{Value: channelID}, // Using "hashtag" key for PK compatibility
-		"processedAt":   &types.AttributeValueMemberS{Value: now},
-		"videoId":       &types.AttributeValueMemberS{Value: video.ID},
-		"title":         &types.AttributeValueMemberS{Value: video.Title},
-		"channelTitle":  &types.AttributeValueMemberS{Value: video.ChannelTitle},
-		"publishedAt":   &types.AttributeValueMemberS{Value: video.PublishedAt},
-		"viewCount":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", video.ViewCount)},
-		"likeCount":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", video.LikeCount)},
-		"summary":       &types.AttributeValueMemberS{Value: summary.ShortSummary},
-		"detailSummary": &types.AttributeValueMemberS{Value: summary.DetailSummary},
-		"thumbnailUrl":  &types.AttributeValueMemberS{Value: thumbURL},
+		"hashtag":      &types.AttributeValueMemberS{Value: channelID}, // Using "hashtag" key for PK compatibility
+		"processedAt":  &types.AttributeValueMemberS{Value: now},
+		"videoId":      &types.AttributeValueMemberS{Value: video.ID},
+		"title":        &types.AttributeValueMemberS{Value: video.Title},
+		"channelTitle": &types.AttributeValueMemberS{Value: video.ChannelTitle},
+		"publishedAt":  &types.AttributeValueMemberS{Value: video.PublishedAt},
+		"viewCount":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", video.ViewCount)},
+		"likeCount":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", video.LikeCount)},
+		"thumbnailUrl": &types.AttributeValueMemberS{Value: thumbURL},
+		"transcript":   &types.AttributeValueMemberS{Value: transcript},
+	}
+
+	if summary != nil {
+		item["summary"] = &types.AttributeValueMemberS{Value: summary.ShortSummary}
+		item["detailSummary"] = &types.AttributeValueMemberS{Value: summary.DetailSummary}
 	}
 
 	_, err := dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
@@ -353,27 +333,85 @@ func handler(ctx context.Context) (BatchStats, error) {
 		title := item.Snippet.Title
 		log.Printf("Processing video: %s (%s)", title, videoID)
 
-		// Check if already processed (and has detailed summary)
-		if isVideoProcessed(ctx, videoID) {
-			log.Printf("Video %s already processed", videoID)
-			stats.VideosAlreadyProcessed++
-			continue
+		// Create VideoDetails struct for saving later
+		videoDetails := VideoDetails{
+			ID:           videoID,
+			Title:        title,
+			PublishedAt:  item.Snippet.PublishedAt,
+			ChannelTitle: item.Snippet.ChannelTitle,
+			ViewCount:    item.Statistics.ViewCount,
+			LikeCount:    item.Statistics.LikeCount,
+			Thumbnails: &youtube.ThumbnailDetails{
+				Medium: item.Snippet.Thumbnails.Medium,
+			},
+		}
+		if item.Snippet.Thumbnails != nil {
+			videoDetails.Thumbnails = item.Snippet.Thumbnails
 		}
 
-		// Check filters (optional)
-		vc := item.Statistics.ViewCount
-		if vc < 100 {
-			log.Printf("Notice: Video %s has low views (%d)", videoID, vc)
-		}
-
-		// Try to get transcript
-		transcript, err := getTranscript(videoID)
+		// Check if already processed
+		existingItem, err := getVideoItem(ctx, videoID)
 		if err != nil {
-			log.Printf("No transcript for %s: %v", videoID, err)
-			stats.VideosWithoutTx++
-			continue
+			log.Printf("Error checking DB for %s: %v", videoID, err)
+			// Continue or fail? Continue trying to process seems safe.
 		}
 
+		if existingItem != nil {
+			// Check if detailSummary exists
+			if _, ok := existingItem["detailSummary"]; ok {
+				log.Printf("Video %s already has summary. Skipping.", videoID)
+				stats.VideosAlreadyProcessed++
+				continue
+			}
+		}
+
+		// Retrieve or Fetch Transcript
+		var transcript string
+		// Check DB first
+		if existingItem != nil {
+			if t, ok := existingItem["transcript"]; ok {
+				transcript = t.(*types.AttributeValueMemberS).Value
+				log.Printf("Found existing transcript for %s", videoID)
+			}
+		}
+
+		// If no transcript, and LOCAL_RUN, fetch it
+		if transcript == "" {
+			if os.Getenv("LOCAL_RUN") == "true" {
+				// Check filters (optional)
+				vc := item.Statistics.ViewCount
+				if vc < 100 {
+					log.Printf("Notice: Video %s has low views (%d)", videoID, vc)
+				}
+
+				log.Printf("Fetching transcript for %s...", videoID)
+				fetchedTx, err := getTranscript(videoID)
+				if err != nil {
+					log.Printf("No transcript found for %s: %v", videoID, err)
+					stats.VideosWithoutTx++
+					continue
+				}
+				transcript = fetchedTx
+
+				// Save transcript immediately to avoid re-fetching
+				if err := saveVideoData(ctx, channelID, videoDetails, transcript, nil); err != nil {
+					log.Printf("Error saving transcript for %s: %v", videoID, err)
+					// Proceed anyway to try summarizing?
+				} else {
+					log.Printf("Saved transcript for %s", videoID)
+				}
+
+				// Add delay to avoid YouTube rate limiting locally
+				time.Sleep(3 * time.Second)
+
+			} else {
+				// AWS Lambda mode but no transcript in DB
+				log.Printf("Skipping video %s: No transcript in DB and not running locally", videoID)
+				continue
+			}
+		}
+
+		// At this point we have a transcript (or we continued).
 		// Generate summary with Bedrock
 		log.Printf("Generating summary for %s...", videoID)
 		summaryData, err := generateSummary(ctx, transcript, title)
@@ -383,34 +421,14 @@ func handler(ctx context.Context) (BatchStats, error) {
 			continue
 		}
 
-		// Save to DynamoDB
-		videoDetails := VideoDetails{
-			ID:          videoID,
-			Title:       title,
-			PublishedAt: item.Snippet.PublishedAt, // Removed Description to avoid error (struct doesn't have it)
-			Thumbnails: &youtube.ThumbnailDetails{
-				Medium: item.Snippet.Thumbnails.Medium,
-			},
-			ChannelTitle: item.Snippet.ChannelTitle,  
-			ViewCount:    item.Statistics.ViewCount,
-			LikeCount:    item.Statistics.LikeCount,
-		}
-
-		if item.Snippet.Thumbnails != nil {
-			videoDetails.Thumbnails = item.Snippet.Thumbnails
-		}
-
-		// Save processing result
-		if err := saveSummary(ctx, channelID, videoDetails, summaryData); err != nil {
+		// Save processing result (Summary + Transcript + Metadata)
+		if err := saveVideoData(ctx, channelID, videoDetails, transcript, summaryData); err != nil {
 			log.Printf("Error saving summary for %s: %v", videoID, err)
 			stats.Errors++
 		} else {
 			log.Printf("Successfully processed video %s", videoID)
 			stats.VideosSummarized++
 		}
-		
-		// Add delay to avoid rate limiting locally
-		time.Sleep(3 * time.Second)
 	}
 	return stats, nil
 }

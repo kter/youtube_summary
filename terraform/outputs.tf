@@ -23,10 +23,7 @@ output "s3_bucket_name" {
   value       = aws_s3_bucket.frontend.id
 }
 
-output "batch_lambda_function_name" {
-  description = "Batch Lambda function name"
-  value       = aws_lambda_function.batch.function_name
-}
+
 
 output "api_lambda_function_name" {
   description = "API Lambda function name"
