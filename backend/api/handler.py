@@ -37,12 +37,37 @@ def get_summaries(table, hashtag: str, limit: int = 50) -> list:
     Get summaries for a specific hashtag, ordered by processedAt descending.
     """
     try:
-        response = table.query(
-            KeyConditionExpression=Key("hashtag").eq(hashtag),
-            ScanIndexForward=False,  # Descending order
-            Limit=limit,
-        )
-        return response.get("Items", [])
+        summaries = []
+        last_key = None
+        
+        # Define fields to project (exclude large transcript)
+        projection = "videoId, title, #sum, detailSummary, processedAt, publishedAt, channelTitle, viewCount, likeCount, thumbnailUrl, thumbnails"
+        expr_names = {"#sum": "summary"}
+
+        while True:
+            query_params = {
+                "KeyConditionExpression": Key("hashtag").eq(hashtag),
+                "ScanIndexForward": False,  # Descending order
+                "ProjectionExpression": projection,
+                "ExpressionAttributeNames": expr_names,
+            }
+            if last_key:
+                query_params["ExclusiveStartKey"] = last_key
+            
+            if limit > 0:
+                remaining = limit - len(summaries)
+                if remaining <= 0:
+                    break
+                query_params["Limit"] = remaining
+
+            response = table.query(**query_params)
+            summaries.extend(response.get("Items", []))
+            
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+                
+        return summaries
     except Exception as e:
         logger.error(f"Error querying summaries: {e}")
         return []
@@ -101,7 +126,7 @@ def lambda_handler(event, context):
         if hashtag not in hashtags:
             return create_response(400, {"error": f"Invalid hashtag. Available: {hashtags}"})
 
-        limit = int(query_params.get("limit", 50))
+        limit = int(query_params.get("limit", 0))
         summaries = get_summaries(table, hashtag, limit)
 
         return create_response(200, {

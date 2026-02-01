@@ -46,71 +46,87 @@ func createResponse(statusCode int, body interface{}) (events.APIGatewayV2HTTPRe
 }
 
 func getSummaries(ctx context.Context, channelID string, limit int) ([]map[string]interface{}, error) {
-	input := &dynamodb.QueryInput{
-		TableName:              aws.String(tableName),
-		KeyConditionExpression: aws.String("hashtag = :h"), // Using "hashtag" as PK name for compatibility
-		// Sort by processedAt descending
-		ScanIndexForward: aws.Bool(false),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":h": &types.AttributeValueMemberS{Value: channelID},
-		},
-		Limit: aws.Int32(int32(limit)),
-	}
-
-	resp, err := dynamoClient.Query(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-
 	summaries := []map[string]interface{}{}
-	for _, item := range resp.Items {
-		// Manual Unmarshal to simple map
-		summary := make(map[string]interface{})
-		// Helper to unmarshal string/number fields
-		if v, ok := item["videoId"].(*types.AttributeValueMemberS); ok {
-			summary["videoId"] = v.Value
-		}
-		if v, ok := item["title"].(*types.AttributeValueMemberS); ok {
-			summary["title"] = v.Value
-		}
-		if v, ok := item["summary"].(*types.AttributeValueMemberS); ok {
-			summary["summary"] = v.Value
-		}
-		if v, ok := item["detailSummary"].(*types.AttributeValueMemberS); ok {
-			summary["detailSummary"] = v.Value
-		}
-		if v, ok := item["processedAt"].(*types.AttributeValueMemberS); ok {
-			summary["processedAt"] = v.Value
-		}
-		if v, ok := item["publishedAt"].(*types.AttributeValueMemberS); ok {
-			summary["publishedAt"] = v.Value
-		}
-		if v, ok := item["channelTitle"].(*types.AttributeValueMemberS); ok {
-			summary["channelTitle"] = v.Value
-		}
-		if v, ok := item["viewCount"].(*types.AttributeValueMemberN); ok {
-			summary["viewCount"] = v.Value
-		}
-		if v, ok := item["likeCount"].(*types.AttributeValueMemberN); ok {
-			summary["likeCount"] = v.Value
-		}
-		if v, ok := item["thumbnailUrl"].(*types.AttributeValueMemberS); ok {
-			summary["thumbnails"] = map[string]interface{}{
-				"medium": map[string]string{"url": v.Value},
-			}
-		} else {
-			if vMap, ok := item["thumbnails"].(*types.AttributeValueMemberM); ok {
-				summary["thumbnails"] = vMap.Value
-			}
+	var lastEvaluatedKey map[string]types.AttributeValue
+
+	for {
+		input := &dynamodb.QueryInput{
+			TableName:              aws.String(tableName),
+			KeyConditionExpression: aws.String("hashtag = :h"),
+			ScanIndexForward:       aws.Bool(false),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":h": &types.AttributeValueMemberS{Value: channelID},
+			},
+			ExclusiveStartKey: lastEvaluatedKey,
+			// Exclude transcript to save bandwidth and avoid hitting 1MB limit early
+			ProjectionExpression: aws.String("videoId, title, summary, detailSummary, processedAt, publishedAt, channelTitle, viewCount, likeCount, thumbnailUrl, thumbnails"),
 		}
 
-		summaries = append(summaries, summary)
+		if limit > 0 {
+			remaining := limit - len(summaries)
+			if remaining <= 0 {
+				break
+			}
+			input.Limit = aws.Int32(int32(remaining))
+		}
+
+		resp, err := dynamoClient.Query(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, item := range resp.Items {
+			summary := make(map[string]interface{})
+			if v, ok := item["videoId"].(*types.AttributeValueMemberS); ok {
+				summary["videoId"] = v.Value
+			}
+			if v, ok := item["title"].(*types.AttributeValueMemberS); ok {
+				summary["title"] = v.Value
+			}
+			if v, ok := item["summary"].(*types.AttributeValueMemberS); ok {
+				summary["summary"] = v.Value
+			}
+			if v, ok := item["detailSummary"].(*types.AttributeValueMemberS); ok {
+				summary["detailSummary"] = v.Value
+			}
+			if v, ok := item["processedAt"].(*types.AttributeValueMemberS); ok {
+				summary["processedAt"] = v.Value
+			}
+			if v, ok := item["publishedAt"].(*types.AttributeValueMemberS); ok {
+				summary["publishedAt"] = v.Value
+			}
+			if v, ok := item["channelTitle"].(*types.AttributeValueMemberS); ok {
+				summary["channelTitle"] = v.Value
+			}
+			if v, ok := item["viewCount"].(*types.AttributeValueMemberN); ok {
+				summary["viewCount"] = v.Value
+			}
+			if v, ok := item["likeCount"].(*types.AttributeValueMemberN); ok {
+				summary["likeCount"] = v.Value
+			}
+			if v, ok := item["thumbnailUrl"].(*types.AttributeValueMemberS); ok {
+				summary["thumbnails"] = map[string]interface{}{
+					"medium": map[string]string{"url": v.Value},
+				}
+			} else {
+				if vMap, ok := item["thumbnails"].(*types.AttributeValueMemberM); ok {
+					summary["thumbnails"] = vMap.Value
+				}
+			}
+
+			summaries = append(summaries, summary)
+		}
+
+		if resp.LastEvaluatedKey == nil {
+			break
+		}
+		lastEvaluatedKey = resp.LastEvaluatedKey
 	}
+
 	// Sort summaries by publishedAt descending (newest first)
 	sort.Slice(summaries, func(i, j int) bool {
 		p1, _ := summaries[i]["publishedAt"].(string)
 		p2, _ := summaries[j]["publishedAt"].(string)
-		// Descending order (newest first)
 		return p1 > p2
 	})
 
@@ -133,7 +149,7 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 
 	if path == "/api/summaries" {
 		limitStr := request.QueryStringParameters["limit"]
-		limit := 50
+		limit := 0 // 0 means unlimited
 		if limitStr != "" {
 			if l, err := strconv.Atoi(limitStr); err == nil {
 				limit = l

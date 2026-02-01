@@ -298,7 +298,7 @@ func handler(ctx context.Context) (BatchStats, error) {
 		ChannelId(channelID).
 		Order("date").
 		Type("video").
-		MaxResults(50)
+		MaxResults(50) // 50 is the maximum allowed by YouTube API per request
 
 	searchResp, err := searchCall.Do()
 	if err != nil {
