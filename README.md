@@ -74,23 +74,27 @@
 3. "Create API key" をクリックし、Google Cloudプロジェクトに関連付けてキーを作成します。
 4. 作成されたAPIキーをコピーします。
 
-#### C. Secrets Manager への登録
+#### C. Parameter Store への登録
 
-取得したAPIキーを AWS Secrets Manager に登録します。以下のコマンドの `YOUR_...` 部分を実際のキーに置き換えて実行してください。
+取得したAPIキーを AWS Systems Manager Parameter Store の `SecureString` として登録します。以下のコマンドの `YOUR_...` 部分を実際のキーに置き換えて実行してください。
 
 **Development環境 (`dev` プロファイル)**
 
 ```bash
 # YouTube API Key
-aws secretsmanager create-secret \
-  --name youtube-summary/youtube-api-key \
-  --secret-string "YOUR_YOUTUBE_API_KEY" \
+aws ssm put-parameter \
+  --name /youtube-summary/youtube-api-key \
+  --type SecureString \
+  --value "YOUR_YOUTUBE_API_KEY" \
+  --overwrite \
   --profile dev
 
 # Gemini API Key
-aws secretsmanager create-secret \
-  --name youtube-summary/gemini-api-key \
-  --secret-string "YOUR_GEMINI_API_KEY" \
+aws ssm put-parameter \
+  --name /youtube-summary/gemini-api-key \
+  --type SecureString \
+  --value "YOUR_GEMINI_API_KEY" \
+  --overwrite \
   --profile dev
 ```
 
@@ -98,15 +102,19 @@ aws secretsmanager create-secret \
 
 ```bash
 # YouTube API Key
-aws secretsmanager create-secret \
-  --name youtube-summary/youtube-api-key \
-  --secret-string "YOUR_YOUTUBE_API_KEY" \
+aws ssm put-parameter \
+  --name /youtube-summary/youtube-api-key \
+  --type SecureString \
+  --value "YOUR_YOUTUBE_API_KEY" \
+  --overwrite \
   --profile prd
 
 # Gemini API Key
-aws secretsmanager create-secret \
-  --name youtube-summary/gemini-api-key \
-  --secret-string "YOUR_GEMINI_API_KEY" \
+aws ssm put-parameter \
+  --name /youtube-summary/gemini-api-key \
+  --type SecureString \
+  --value "YOUR_GEMINI_API_KEY" \
+  --overwrite \
   --profile prd
 ```
 

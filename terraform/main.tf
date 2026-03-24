@@ -30,7 +30,7 @@ locals {
     prd = "devtools.site"
   }
 
-  domain = local.domain_map[local.env]
+  domain    = local.domain_map[local.env]
   zone_name = local.zone_map[local.env]
 
   common_tags = {

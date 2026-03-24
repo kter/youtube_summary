@@ -15,7 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/horiagug/youtube-transcript-api-go/pkg/yt_transcript"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
@@ -23,12 +23,12 @@ import (
 
 // Global Configuration
 var (
-	dynamoClient   *dynamodb.Client
-	secretsClient  *secretsmanager.Client
-	bedrockClient  *bedrockruntime.Client
-	tableName      string
-	minViewCount   uint64
-	minLikeCount   uint64
+	dynamoClient  *dynamodb.Client
+	ssmClient     *ssm.Client
+	bedrockClient *bedrockruntime.Client
+	tableName     string
+	minViewCount  uint64
+	minLikeCount  uint64
 )
 
 type BatchStats struct {
@@ -63,7 +63,7 @@ func init() {
 	}
 
 	dynamoClient = dynamodb.NewFromConfig(cfg)
-	secretsClient = secretsmanager.NewFromConfig(cfg)
+	ssmClient = ssm.NewFromConfig(cfg)
 
 	// Bedrock client needs us-east-1 region for Claude models
 	bedrockCfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
@@ -73,18 +73,19 @@ func init() {
 	bedrockClient = bedrockruntime.NewFromConfig(bedrockCfg)
 }
 
-func getSecret(ctx context.Context, secretName string) (string, error) {
-	input := &secretsmanager.GetSecretValueInput{
-		SecretId: aws.String(secretName),
+func getParameter(ctx context.Context, parameterName string) (string, error) {
+	input := &ssm.GetParameterInput{
+		Name:           aws.String(parameterName),
+		WithDecryption: aws.Bool(true),
 	}
-	result, err := secretsClient.GetSecretValue(ctx, input)
+	result, err := ssmClient.GetParameter(ctx, input)
 	if err != nil {
 		return "", err
 	}
-	if result.SecretString != nil {
-		return *result.SecretString, nil
+	if result.Parameter != nil && result.Parameter.Value != nil {
+		return *result.Parameter.Value, nil
 	}
-	return "", fmt.Errorf("secret string is empty")
+	return "", fmt.Errorf("parameter value is empty")
 }
 
 // getTranscript uses youtube-transcript-api-go to fetch subtitles
@@ -162,7 +163,7 @@ func generateSummary(ctx context.Context, transcript, title string) (*SummaryDat
 	// Clean up response text (remove markdown code blocks if present)
 	responseText = strings.TrimSpace(responseText)
 	if strings.Contains(responseText, "```") {
-		// Remove ```json and ``` 
+		// Remove ```json and ```
 		responseText = strings.ReplaceAll(responseText, "```json", "")
 		responseText = strings.ReplaceAll(responseText, "```", "")
 		responseText = strings.TrimSpace(responseText)
@@ -273,13 +274,16 @@ func handler(ctx context.Context) (BatchStats, error) {
 	}
 	log.Printf("Processing channel: %s", channelID)
 
-	// Get Secrets
-	ytSecret := os.Getenv("YOUTUBE_API_SECRET")
-	if ytSecret == "" {
-		ytSecret = "youtube-summary/youtube-api-key"
+	// Get SSM parameters
+	ytParameter := os.Getenv("YOUTUBE_API_PARAMETER")
+	if ytParameter == "" {
+		ytParameter = os.Getenv("YOUTUBE_API_SECRET")
+	}
+	if ytParameter == "" {
+		ytParameter = "/youtube-summary/youtube-api-key"
 	}
 
-	ytKey, err := getSecret(ctx, ytSecret)
+	ytKey, err := getParameter(ctx, ytParameter)
 	if err != nil {
 		log.Printf("Error getting YouTube API key: %v", err)
 		return stats, err
@@ -322,7 +326,7 @@ func handler(ctx context.Context) (BatchStats, error) {
 	// Search API doesn't return viewCount or likeCount, so we need Videos.List
 	videosCall := ytService.Videos.List([]string{"snippet", "statistics", "contentDetails"}).
 		Id(strings.Join(videoIDs, ","))
-	
+
 	videosResp, err := videosCall.Do()
 	if err != nil {
 		return stats, fmt.Errorf("error fetching video details: %w", err)

@@ -34,3 +34,13 @@ output "dynamodb_table_name" {
   description = "DynamoDB table name"
   value       = aws_dynamodb_table.summaries.name
 }
+
+output "youtube_api_parameter_name" {
+  description = "SSM Parameter Store name for the YouTube API key"
+  value       = local.youtube_api_parameter_name
+}
+
+output "gemini_api_parameter_name" {
+  description = "SSM Parameter Store name for the Gemini API key"
+  value       = local.gemini_api_parameter_name
+}

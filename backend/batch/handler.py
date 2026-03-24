@@ -36,13 +36,13 @@ logger.setLevel(logging.INFO)
 
 # AWS clients
 dynamodb = boto3.resource("dynamodb")
-secrets_client = boto3.client("secretsmanager")
+ssm_client = boto3.client("ssm")
 
 
-def get_secret(secret_name: str) -> str:
-    """Retrieve secret value from AWS Secrets Manager."""
-    response = secrets_client.get_secret_value(SecretId=secret_name)
-    return response["SecretString"]
+def get_parameter(parameter_name: str) -> str:
+    """Retrieve decrypted parameter value from AWS Systems Manager Parameter Store."""
+    response = ssm_client.get_parameter(Name=parameter_name, WithDecryption=True)
+    return response["Parameter"]["Value"]
 
 
 def get_youtube_client(api_key: str):
@@ -142,7 +142,7 @@ def generate_summary(transcript: str, title: str, gemini_api_key: str) -> Option
     """
     try:
         genai.configure(api_key=gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-3-flash-preview")
 
         prompt = f"""以下のYouTube動画の字幕テキストを元に、日本語で{SUMMARY_MAX_CHARS}文字程度の要約を作成してください。
 
@@ -214,8 +214,14 @@ def lambda_handler(event, context):
     hashtags_json = os.environ.get("HASHTAGS", json.dumps(DEFAULT_HASHTAGS))
     min_view_count = int(os.environ.get("MIN_VIEW_COUNT", MIN_VIEW_COUNT))
     min_like_count = int(os.environ.get("MIN_LIKE_COUNT", MIN_LIKE_COUNT))
-    youtube_secret_name = os.environ.get("YOUTUBE_API_SECRET", "youtube-summary/youtube-api-key")
-    gemini_secret_name = os.environ.get("GEMINI_API_SECRET", "youtube-summary/gemini-api-key")
+    youtube_parameter_name = os.environ.get(
+        "YOUTUBE_API_PARAMETER",
+        os.environ.get("YOUTUBE_API_SECRET", "/youtube-summary/youtube-api-key"),
+    )
+    gemini_parameter_name = os.environ.get(
+        "GEMINI_API_PARAMETER",
+        os.environ.get("GEMINI_API_SECRET", "/youtube-summary/gemini-api-key"),
+    )
 
     # Parse hashtags
     try:
@@ -223,9 +229,9 @@ def lambda_handler(event, context):
     except json.JSONDecodeError:
         hashtags = DEFAULT_HASHTAGS
 
-    # Get API keys from Secrets Manager
-    youtube_api_key = get_secret(youtube_secret_name)
-    gemini_api_key = get_secret(gemini_secret_name)
+    # Get API keys from SSM Parameter Store
+    youtube_api_key = get_parameter(youtube_parameter_name)
+    gemini_api_key = get_parameter(gemini_parameter_name)
 
     # Initialize clients
     youtube = get_youtube_client(youtube_api_key)
